@@ -14,7 +14,7 @@ No AWS bill. No storage limits. No vendor lock-in. Just Telegram.
 ![Self Hosted](https://img.shields.io/badge/self--hosted-ready-success)
 ![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)
 
-![Dashboard](screenshots/dashboard.png?v=1f6f325)
+![Dashboard](screenshots/dashboard-current.png)
 
 ---
 
@@ -36,22 +36,22 @@ No AWS bill. No storage limits. No vendor lock-in. Just Telegram.
 ## Screenshots
 
 ### Login
-![Login](screenshots/login.png?v=1f6f325)
+![Login](screenshots/login-current.png)
 
 ### Dashboard — grid view with thumbnails
-![Dashboard](screenshots/dashboard.png?v=1f6f325)
+![Dashboard](screenshots/dashboard-current.png)
 
 ### Share links manager
-![Shares](screenshots/shares.png?v=1f6f325)
+![Shares](screenshots/shares-current.png)
 
 ### Settings & branding
-![Settings](screenshots/settings.png?v=1f6f325)
+![Settings](screenshots/settings-current.png)
 
 ### Public share page (file)
-![Share file](screenshots/share-file.png?v=1f6f325)
+![Share file](screenshots/share-file-current.png)
 
 ### Public share page (mobile)
-![Share mobile](screenshots/share-mobile.png?v=1f6f325)
+![Share mobile](screenshots/share-mobile-current.png)
 
 ---
 
