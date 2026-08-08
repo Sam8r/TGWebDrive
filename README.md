@@ -2,7 +2,7 @@
 
 **Self-hosted cloud drive that turns Telegram into unlimited free storage.**
 
-TGWebDrive is a personal (or team) file drive that stores everything inside Telegram chats/channels via the Telegram API — giving you effectively unlimited, free cloud storage with a polished web UI, public share links, multi-user access, full white-label branding, and a REST API.
+TGWebDrive is a personal (or team) file drive that stores everything inside Telegram chats/channels via the Telegram API — giving you effectively unlimited, free cloud storage with a polished Google Drive-style web UI, background uploads, public share links, multi-user access, full white-label branding, and a REST API.
 
 No AWS bill. No storage limits. No vendor lock-in. Just Telegram.
 
@@ -28,6 +28,7 @@ No AWS bill. No storage limits. No vendor lock-in. Just Telegram.
 | **White-label branding** | Rename the app, set your accent color, upload your logo, and customize the footer — fully yours. |
 | **Multi-user** | Admins manage users (admin / user roles). Each session is isolated. |
 | **REST API** | Ship API keys and automate uploads/downloads from scripts or other apps. |
+| **Background transfers** | Uploads continue while you navigate the app, with progress, cancellation, retry, and service-worker recovery. |
 | **No build step** | Vanilla JS frontend. Clone, `npm install`, run. |
 
 ---
@@ -57,10 +58,15 @@ No AWS bill. No storage limits. No vendor lock-in. Just Telegram.
 ## Features
 
 **Files**
-- Upload (resumable, chunked) — up to 2 GB per file, ~4 GB with Telegram Premium
+- Upload files with drag-and-drop, multi-select, or a folder picker
+- Background uploads with a persistent progress dock, concurrent transfers, cancel, retry, and live progress
+- Upload whole directory trees while preserving nested folder structure
+- Upload (streamed, chunked) — up to 2 GB per file, ~4 GB with Telegram Premium
+- **Large files auto-split**: anything bigger than ~1.9 GB is transparently split into ≤2 GB Telegram parts that reassemble into a single file on download (no extra steps)
 - Download, rename, delete, search
 - Auto-generated thumbnails for images (via `sharp`); native Telegram thumbnails for videos/docs
-- Grid & list views
+- Grid and list views with bulk selection and actions
+- Folder cards, nested subfolders, breadcrumbs, and folder deletion
 
 **Previews**
 - Images, **video with seekable streaming**, audio, PDF — all inline
@@ -71,6 +77,7 @@ No AWS bill. No storage limits. No vendor lock-in. Just Telegram.
 - Password protection & expiry timers
 - Folder **"Download all"** streamed as a ZIP
 - Custom-branded public pages (your name, colors, logo, tagline, copyright)
+- Share metadata including download counts and expiration status
 
 **Branding (admin)**
 - Custom app name (shown in dashboard, login, share pages, browser tab, favicon)
@@ -82,6 +89,7 @@ No AWS bill. No storage limits. No vendor lock-in. Just Telegram.
 - Admin/user roles with a managed user table
 - Connect multiple Telegram accounts and switch between them
 - Saved Messages and channel-backed folders
+- Per-session account selection and protected admin settings
 
 **API**
 - Token-based REST API (`/api/v1/...`) for programmatic upload/download/listing
@@ -89,6 +97,8 @@ No AWS bill. No storage limits. No vendor lock-in. Just Telegram.
 **UX**
 - Dark & light themes
 - Fully mobile-responsive
+- Google Drive-inspired sidebar, search, toolbar, menus, dialogs, and responsive upload dock
+- Persistent service-worker upload handling across page navigation
 - Self-hosted Lucide icons — zero external requests
 
 ---
@@ -120,6 +130,7 @@ All settings are optional except `SECRET`. Copy `.env.example` to `.env` and edi
 | `SECRET` | *(auto-generated)* | 64+ hex chars used to sign session cookies & share tokens. **Set your own** with `openssl rand -hex 32`. |
 | `PUBLIC_URL` | — | Public base URL (no trailing slash), e.g. `https://drive.example.com`. Used to build share links. |
 | `MAX_UPLOAD_BYTES` | `2147483648` | Max upload size (2 GB; Telegram's per-file cap) |
+| `SPLIT_PART_BYTES` | `~2040109465` | Files larger than this are auto-split into multipart entries that reassemble on download. Defaults to ~1.9 GiB for a safe margin under Telegram's 2 GiB cap. |
 | `API_PRESETS` | — | Optional `api_id:api_hash,api_id:api_hash` presets shown on the login screen |
 
 ---
@@ -145,9 +156,14 @@ Files are never stored on your server's disk — the app streams them straight b
 
 ---
 
+## Deployment Notes
+
+TGWebDrive needs a persistent Node.js process. It is not a drop-in deployment for Vercel or Netlify serverless functions because it maintains Telegram sessions, SQLite metadata, streamed uploads/downloads, and long-lived progress connections.
+
+Use a VPS, or a persistent Node.js host such as Railway, Render, or Fly.io. Keep the `data/` directory backed up: it contains the SQLite database, Telegram sessions, and uploaded branding assets. See [INSTALL.md](INSTALL.md) for PM2, reverse proxy, HTTPS, and upload-size configuration.
+
 ## Roadmap
 
-- [ ] Drag-and-drop folder upload
 - [ ] 2FA / TOTP login for admins
 - [ ] Per-user branding presets
 - [ ] Resume support for large downloads

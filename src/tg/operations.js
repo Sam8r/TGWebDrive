@@ -26,6 +26,49 @@ export function buildPeer(folder) {
 
 export const SAVED_PEER = { kind: "self" };
 
+/* ---------- multipart helpers ---------- */
+
+// True for the synthetic ids we hand to the frontend (e.g. "mp_abc123").
+export function isMultipartId(id) {
+  return typeof id === "string" && id.startsWith("mp_");
+}
+
+// Turn a multipart_files row into the same shape produced by serializeMessage
+// so the UI can treat it like any other file.
+export function serializeMultipart(mp) {
+  let parts = [];
+  try {
+    parts = JSON.parse(mp.parts_json) || [];
+  } catch {}
+  const mime = mp.mime || "application/octet-stream";
+  return {
+    id: mp.id,
+    multipart: true,
+    partsCount: parts.length,
+    date: Math.floor(Number(mp.created_at) / 1000),
+    caption: "",
+    name: mp.name,
+    mime,
+    ext: extOf(mp.name),
+    size: Number(mp.size),
+    sizeText: fmtBytes(Number(mp.size)),
+    kind: classify(mime, mp.name),
+    isPhoto: false,
+    hasThumb: false,
+    width: null,
+    height: null,
+    duration: null,
+  };
+}
+
+export function parseParts(mp) {
+  try {
+    return JSON.parse(mp.parts_json) || [];
+  } catch {
+    return [];
+  }
+}
+
 /* ---------- message serialization ---------- */
 
 function docName(doc) {
@@ -268,6 +311,52 @@ async function streamRange(client, msg, req, res, start, length, total) {
         sent += out.length;
       }
       if (sent >= length) break;
+    }
+  } catch (e) {
+    if (!res.headersSent) throw e;
+    try { res.end(); } catch {}
+  } finally {
+    if (req) req.removeListener("close", onAbort);
+    if (!res.destroyed && !res.writableEnded) res.end();
+  }
+}
+
+// Stream a multipart (split) file as one continuous download: each Telegram
+// part is fetched in order and piped straight to the client. Range requests
+// are not supported across parts, so callers force a full stream.
+export async function streamMultipart(client, peer, parts, total, req, res, { attachment = false, name, mime } = {}) {
+  const contentType = mime || "application/octet-stream";
+  const fileName = name || "file";
+
+  // Fetch every part message up front so we can pipe them back to back.
+  const ids = parts.map((p) => Number(p.msgId)).filter((x) => !isNaN(x));
+  let messages = [];
+  if (ids.length) messages = await client.getMessages(peer, { ids });
+
+  res.setHeader("Accept-Ranges", "none");
+  res.setHeader("Cache-Control", "private, max-age=3600");
+  res.setHeader("Content-Type", contentType);
+  res.setHeader("Content-Disposition", `${attachment ? "attachment" : "inline"}; filename*=UTF-8''${encodeURIComponent(fileName)}`);
+  if (total) res.setHeader("Content-Length", String(total));
+  res.writeHead(200);
+
+  let aborted = false;
+  const onAbort = () => (aborted = true);
+  if (req) req.on("close", onAbort);
+
+  try {
+    for (let i = 0; i < messages.length; i++) {
+      if (aborted || res.destroyed) break;
+      const msg = Array.isArray(messages) ? messages[i] : messages;
+      if (!msg) continue;
+      const writer = {
+        async write(chunk) {
+          if (aborted || res.destroyed) throw new Error("aborted");
+          if (!res.write(chunk)) await new Promise((r) => res.once("drain", r));
+        },
+        async close() {},
+      };
+      await client.downloadMedia(msg, { outputFile: writer });
     }
   } catch (e) {
     if (!res.headersSent) throw e;

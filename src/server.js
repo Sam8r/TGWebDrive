@@ -16,9 +16,26 @@ import { branding } from "./routes/branding.js";
 const app = express();
 app.set("trust proxy", 1);
 app.disable("x-powered-by");
-app.use(compression());
-app.use(express.json({ limit: "1mb" }));
+app.use(
+  compression({
+    // Never compress Server-Sent Events — gzip buffering freezes upload progress.
+    filter: (req, res) => {
+      const ct = res.getHeader("Content-Type");
+      if (typeof ct === "string" && ct.includes("text/event-stream")) return false;
+      return compression.filter(req, res);
+    },
+  })
+);
 app.use(cookieParser(config.secret));
+
+// Parse JSON bodies for API routes, but never for the upload endpoint — its body
+// is a raw file stream that express.json would otherwise try to parse (breaking
+// uploads of files whose browser-detected type is application/json).
+const jsonParser = express.json({ limit: "1mb" });
+app.use((req, res, next) => {
+  if (req.method === "POST" && req.path === "/api/files/upload") return next();
+  jsonParser(req, res, next);
+});
 
 // security headers
 app.use((req, res, next) => {
@@ -51,11 +68,17 @@ app.get(/^\/(?!api\/).*/, (req, res, next) => {
 
 // error handler
 app.use((err, req, res, _next) => {
+  // Upload failures used to vanish: HttpError(400) and JSON-parse errors return
+  // without logging, so a rejected upload left no trace. Log every upload-path
+  // error so they're diagnosable.
+  if (req.path.includes("/files/upload")) {
+    console.error("[upload-error]", JSON.stringify({ status: err?.status || err?.code, type: err?.type, isHttp: err instanceof HttpError, msg: err?.message }));
+  }
   if (err instanceof HttpError) {
     return res.status(err.status || 400).json({ error: err.message });
   }
-  if (err?.type === "entity.parse.failed") {
-    return res.status(400).json({ error: "Invalid JSON body" });
+  if (err?.type === "entity.parse.failed" || err?.type === "entity.too.large") {
+    return res.status(400).json({ error: err?.type === "entity.too.large" ? "Upload too large" : "Invalid request body" });
   }
   console.error("[error]", err?.stack || err);
   res.status(500).json({ error: err?.message || "Internal error" });

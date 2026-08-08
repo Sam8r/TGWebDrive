@@ -4,7 +4,7 @@ import archiver from "archiver";
 import { stmt } from "../db.js";
 import { requireAppAuth, requireAccount } from "../middleware.js";
 import { getConnectedClient } from "../tg/manager.js";
-import { buildPeer, getOne, serializeMessage, streamToResponse, streamThumb, listMessages } from "../tg/operations.js";
+import { buildPeer, getOne, serializeMessage, serializeMultipart, parseParts, streamToResponse, streamMultipart, streamThumb, listMessages } from "../tg/operations.js";
 import { config } from "../config.js";
 import { hashPassword, verifyPassword, shortId, safeFilename } from "../util.js";
 
@@ -116,7 +116,12 @@ share.get("/shares", requireAppAuth, requireAccount, (req, res) => {
 share.get("/shares/for", requireAppAuth, requireAccount, (req, res) => {
   const row = stmt.getFolder.get(req.query.folder, req.accountId);
   if (!row) return res.status(404).json({ error: "Folder not found" });
-  const s = stmt.getShareByFile.get(req.accountId, row.peer_json, Number(req.query.msgId));
+  let s;
+  if (req.query.multipartId) {
+    s = stmt.getShareByMultipart.get(req.accountId, row.peer_json, String(req.query.multipartId));
+  } else {
+    s = stmt.getShareByFile.get(req.accountId, row.peer_json, Number(req.query.msgId));
+  }
   if (!s) return res.json({ none: true });
   res.json({ share: { ...publicShare(s), url: `${config.publicUrl}/s/${s.id}` } });
 });
@@ -131,7 +136,7 @@ share.get("/shares/forFolder", requireAppAuth, requireAccount, (req, res) => {
 
 share.post("/shares", requireAppAuth, requireAccount, (req, res, next) => {
   try {
-    const { folder, msgId, name, mime, size, password, expiresInHours, kind, title } = req.body || {};
+    const { folder, msgId, multipartId, name, mime, size, password, expiresInHours, kind, title } = req.body || {};
     const row = stmt.getFolder.get(folder, req.accountId);
     if (!row) return res.status(404).json({ error: "Folder not found" });
     const shareKind = kind === "folder" ? "folder" : "file";
@@ -141,16 +146,27 @@ share.post("/shares", requireAppAuth, requireAccount, (req, res, next) => {
     if (shareKind === "folder") {
       stmt.deleteFolderShares.run(req.accountId, row.peer_json);
       stmt.addShare.run({
-        id, account_id: req.accountId, peer_json: row.peer_json, msg_id: null,
+        id, account_id: req.accountId, peer_json: row.peer_json, msg_id: null, multipart_id: null,
         name: title || row.title || "Folder", mime: null, size: null,
         password_hash: password ? hashPassword(password) : null, expires_at: expiresAt,
         created_at: Date.now(), kind: "folder",
+      });
+    } else if (multipartId) {
+      // a split (multipart) file shared as one logical file
+      const mp = stmt.getMultipart.get(String(multipartId));
+      if (!mp || mp.account_id !== req.accountId) return res.status(404).json({ error: "File not found" });
+      stmt.deleteSharesByMultipart.run(String(multipartId));
+      stmt.addShare.run({
+        id, account_id: req.accountId, peer_json: row.peer_json, msg_id: null, multipart_id: String(multipartId),
+        name: name || mp.name || null, mime: mime || mp.mime || null, size: size || mp.size || null,
+        password_hash: password ? hashPassword(password) : null, expires_at: expiresAt,
+        created_at: Date.now(), kind: "file",
       });
     } else {
       if (!msgId) return res.status(400).json({ error: "msgId required" });
       stmt.deleteSharesByFile.run(req.accountId, row.peer_json, Number(msgId));
       stmt.addShare.run({
-        id, account_id: req.accountId, peer_json: row.peer_json, msg_id: Number(msgId),
+        id, account_id: req.accountId, peer_json: row.peer_json, msg_id: Number(msgId), multipart_id: null,
         name: name || null, mime: mime || null, size: size || null,
         password_hash: password ? hashPassword(password) : null, expires_at: expiresAt,
         created_at: Date.now(), kind: "file",
@@ -177,8 +193,17 @@ pubBin.get("/s/:id/raw", async (req, res, next) => {
     if (!s) return;
     const client = await getConnectedClient(s.account_id);
     const peer = buildPeer({ peer_json: s.peer_json });
-    const msg = await getOne(client, peer, s.msg_id);
     stmt.incShareDownload.run(s.id);
+    if (s.multipart_id) {
+      const mp = stmt.getMultipart.get(s.multipart_id);
+      if (!mp) return res.status(404).end();
+      return await streamMultipart(client, peer, parseParts(mp), Number(mp.size), req, res, {
+        attachment: req.query.dl === "1",
+        name: s.name || mp.name,
+        mime: s.mime || mp.mime,
+      });
+    }
+    const msg = await getOne(client, peer, s.msg_id);
     await streamToResponse(client, msg, req, res, { attachment: req.query.dl === "1", name: s.name, mime: s.mime });
   } catch (e) {
     if (!res.headersSent) next(e);
@@ -189,6 +214,7 @@ pubBin.get("/s/:id/thumb", async (req, res, next) => {
   try {
     const s = loadShareOrDeny(req, res);
     if (!s) return;
+    if (s.multipart_id) return res.status(404).end();
     const client = await getConnectedClient(s.account_id);
     const peer = buildPeer({ peer_json: s.peer_json });
     const msg = await getOne(client, peer, s.msg_id);

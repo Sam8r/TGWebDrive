@@ -68,12 +68,41 @@ CREATE TABLE IF NOT EXISTS users (
   role TEXT NOT NULL DEFAULT 'user',
   created_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS sessions (
+  sid TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  username TEXT NOT NULL,
+  role TEXT NOT NULL,
+  current_account_id TEXT,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
+
+CREATE TABLE IF NOT EXISTS multipart_files (
+  id TEXT PRIMARY KEY,                 -- logical file id, prefixed 'mp_'
+  account_id TEXT NOT NULL,
+  peer_json TEXT NOT NULL,             -- folder peer this file lives in
+  name TEXT NOT NULL,
+  mime TEXT,
+  size INTEGER NOT NULL,               -- total reassembled size
+  parts_json TEXT NOT NULL,            -- JSON [{ msgId, size }, ...] in order
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_multipart_peer ON multipart_files(account_id, peer_json);
 `);
 
 // migrations for evolving schema
 {
   const shareCols = db.prepare("PRAGMA table_info(shares)").all().map((c) => c.name);
   if (!shareCols.includes("kind")) db.exec("ALTER TABLE shares ADD COLUMN kind TEXT NOT NULL DEFAULT 'file'");
+  if (!shareCols.includes("multipart_id")) db.exec("ALTER TABLE shares ADD COLUMN multipart_id TEXT");
+  const folderCols = db.prepare("PRAGMA table_info(folders)").all().map((c) => c.name);
+  if (!folderCols.includes("parent_id")) db.exec("ALTER TABLE folders ADD COLUMN parent_id TEXT");
 }
 
 export function metaGet(k, dflt = null) {
@@ -93,13 +122,13 @@ export const stmt = {
   updateAccount: db.prepare(`UPDATE accounts SET session=@session, is_premium=@is_premium, label=@label, user_id=@user_id, username=@username WHERE id=@id`),
   deleteAccount: db.prepare(`DELETE FROM accounts WHERE id = ?`),
 
-  addFolder: db.prepare(`INSERT INTO folders (id,account_id,title,peer_json,kind,created_at) VALUES (@id,@account_id,@title,@peer_json,@kind,@created_at)`),
+  addFolder: db.prepare(`INSERT INTO folders (id,account_id,parent_id,title,peer_json,kind,created_at) VALUES (@id,@account_id,@parent_id,@title,@peer_json,@kind,@created_at)`),
   foldersFor: db.prepare(`SELECT * FROM folders WHERE account_id = ? ORDER BY kind DESC, title COLLATE NOCASE`),
   getFolder: db.prepare(`SELECT * FROM folders WHERE id = ? AND account_id = ?`),
   deleteFolder: db.prepare(`DELETE FROM folders WHERE id = ? AND account_id = ?`),
 
-  addShare: db.prepare(`INSERT INTO shares (id,account_id,peer_json,msg_id,name,mime,size,password_hash,expires_at,created_at,kind)
-    VALUES (@id,@account_id,@peer_json,@msg_id,@name,@mime,@size,@password_hash,@expires_at,@created_at,@kind)`),
+  addShare: db.prepare(`INSERT INTO shares (id,account_id,peer_json,msg_id,multipart_id,name,mime,size,password_hash,expires_at,created_at,kind)
+    VALUES (@id,@account_id,@peer_json,@msg_id,@multipart_id,@name,@mime,@size,@password_hash,@expires_at,@created_at,@kind)`),
   getShare: db.prepare(`SELECT * FROM shares WHERE id = ?`),
   getShareByFile: db.prepare(`SELECT * FROM shares WHERE account_id = ? AND peer_json = ? AND msg_id = ? ORDER BY created_at DESC LIMIT 1`),
   deleteSharesByFile: db.prepare(`DELETE FROM shares WHERE account_id = ? AND peer_json = ? AND msg_id = ?`),
@@ -121,6 +150,24 @@ export const stmt = {
   updateUser: db.prepare(`UPDATE users SET password_hash = @password_hash, role = @role WHERE id = @id`),
   deleteUser: db.prepare(`DELETE FROM users WHERE id = ?`),
   countUsers: db.prepare(`SELECT COUNT(*) AS c FROM users`),
+
+  addMultipart: db.prepare(`INSERT INTO multipart_files (id,account_id,peer_json,name,mime,size,parts_json,created_at)
+    VALUES (@id,@account_id,@peer_json,@name,@mime,@size,@parts_json,@created_at)`),
+  getMultipart: db.prepare(`SELECT * FROM multipart_files WHERE id = ?`),
+  listMultipart: db.prepare(`SELECT * FROM multipart_files WHERE account_id = ? AND peer_json = ? ORDER BY created_at DESC`),
+  renameMultipart: db.prepare(`UPDATE multipart_files SET name = @name WHERE id = @id`),
+  updateMultipartParts: db.prepare(`UPDATE multipart_files SET parts_json = @parts_json WHERE id = @id`),
+  deleteMultipart: db.prepare(`DELETE FROM multipart_files WHERE id = ?`),
+  getShareByMultipart: db.prepare(`SELECT * FROM shares WHERE account_id = ? AND peer_json = ? AND multipart_id = ? ORDER BY created_at DESC LIMIT 1`),
+  deleteSharesByMultipart: db.prepare(`DELETE FROM shares WHERE multipart_id = ?`),
+
+  addSession: db.prepare(`INSERT INTO sessions (sid,user_id,username,role,current_account_id,created_at,expires_at)
+    VALUES (@sid,@user_id,@username,@role,@current_account_id,@created_at,@expires_at)`),
+  getSession: db.prepare(`SELECT * FROM sessions WHERE sid = ?`),
+  updateSessionRow: db.prepare(`UPDATE sessions SET current_account_id = @current_account_id WHERE sid = @sid`),
+  deleteSession: db.prepare(`DELETE FROM sessions WHERE sid = ?`),
+  deleteExpiredSessions: db.prepare(`DELETE FROM sessions WHERE expires_at < ?`),
+  deleteSessionsByUser: db.prepare(`DELETE FROM sessions WHERE user_id = ?`),
 };
 
 // Migration: seed an admin user from the legacy single admin password (if present),

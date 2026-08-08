@@ -8,6 +8,7 @@ import {
   getSession,
   updateSession,
   destroySession,
+  destroyUserSessions,
 } from "../middleware.js";
 import { hashPassword, verifyPassword, uid } from "../util.js";
 import { beginLogin, resendCode, finishLogin, cancelLogin, dropClient } from "../tg/manager.js";
@@ -56,16 +57,17 @@ auth.post("/auth/setup", (req, res) => {
   } catch (e) {
     return res.status(400).json({ error: "Username already exists" });
   }
-  createSession(req, res, { id, username, role: "admin" });
+  createSession(req, res, { id, username, role: "admin" }, { remember: true });
   res.json({ ok: true });
 });
 
 auth.post("/auth/login", (req, res) => {
   const username = String(req.body?.username || "").trim().toLowerCase();
   const password = String(req.body?.password || "");
+  const remember = req.body?.remember !== false && req.body?.remember !== "false";
   const user = stmt.getUserByUsername.get(username);
   if (!user || !verifyPassword(password, user.password_hash)) return res.status(401).json({ error: "Wrong username or password" });
-  createSession(req, res, { id: user.id, username: user.username, role: user.role });
+  createSession(req, res, { id: user.id, username: user.username, role: user.role }, { remember });
   res.json({ ok: true });
 });
 
@@ -129,6 +131,7 @@ auth.delete("/users/:id", requireAppAuth, requireAdmin, (req, res) => {
     if (admins <= 1) return res.status(400).json({ error: "Cannot delete the last admin" });
   }
   stmt.deleteUser.run(req.params.id);
+  destroyUserSessions(req.params.id);
   res.json({ ok: true });
 });
 
